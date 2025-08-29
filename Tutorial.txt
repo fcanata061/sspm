@@ -1,0 +1,552 @@
+SSPM - TUTORIAL COMPLETO (edição modular lib/*.sh)
+==================================================
+
+Este arquivo-único em texto explica como instalar e usar o sspm (edição modular),
+como organizar a árvore de diretórios, todos os comandos e variáveis, boas práticas,
+e traz 4 receitas de exemplo:
+
+  0) Uma receita “didática” com TUDO suportado (patch, check, post_install, etc.)
+  1) glibc (receita real, simplificada, nativa)
+  2) gcc   (receita real, simplificada, nativa)
+  3) firefox (receita real, simplificada, via `mach`, empacotando binários)
+
+NOTA IMPORTANTE
+---------------
+- Este tutorial foi escrito para a versão modular do sspm (com pastas lib/*.sh) que
+  não compila dependências de ferramentas por conta própria e não possui multilíngue.
+- Assume um sistema com ferramentas básicas já instaladas: bash, coreutils, curl,
+  tar, zstd, file, patch, grep, sed, make, gcc, pkg-config, etc.
+- As receitas “reais” a seguir são simplificadas para um build nativo padrão e podem
+  exigir ajustes conforme a sua distro, toolchain e necessidades (CFLAGS, multilib,
+  toolchain externa, LLVM/Clang, Rust, Node, Python, etc).
+
+======================================================================
+1) INSTALAÇÃO DO SSPM (EDIÇÃO MODULAR)
+======================================================================
+
+Estrutura do projeto sspm (edição modular):
+
+  sspm_clean/
+  ├── sspm                    # binário principal
+  ├── lib/
+  │   ├── core.sh             # build/install/remove + empacotamento
+  │   ├── deps.sh             # resolução topológica e orfãos
+  │   ├── pkg.sh              # DB simples, helpers de receita
+  │   └── ui.sh               # cores/spinner/logs
+  ├── man/
+  │   └── sspm.1              # manual separado (opcional)
+  └── examples/
+      └── hello.pkg           # receita de exemplo
+
+Instalação local no $HOME:
+  $ cd sspm_clean
+  $ chmod +x sspm
+  # Opcional: adicionar ao PATH
+  $ echo 'export PATH="$HOME/sspm_clean:$PATH"' >> ~/.bashrc
+  $ source ~/.bashrc
+  $ sspm help
+
+Instalação “global” (requer root):
+  # Instala binário
+  $ sudo install -Dm0755 sspm /usr/local/bin/sspm
+  # Instala libs
+  $ sudo install -Dm0755 lib/*.sh -t /usr/local/lib/sspm
+  # Instala manpage
+  $ sudo install -Dm0644 man/sspm.1 /usr/local/share/man/man1/sspm.1
+
+  # Se instalou as libs em /usr/local/lib/sspm, ajuste o sspm para localizar:
+  # (no sspm, LIBDIR deve apontar para /usr/local/lib/sspm)
+  # ou mantenha a estrutura lado a lado e chame ./sspm diretamente.
+
+
+======================================================================
+2) ÁRVORE DE DIRETÓRIOS RECOMENDADA PARA RECEITAS/BUILD
+======================================================================
+
+Você pode organizar seus pacotes (receitas) em uma pasta “repo” sua:
+
+  ~/pkgs/
+  ├── base/
+  │   ├── glibc.pkg
+  │   └── gcc.pkg
+  ├── desktop/
+  │   └── firefox.pkg
+  └── custom/
+      └── minha-receita.pkg
+
+Cada diretório (ex.: ~/pkgs/base) pode ter várias receitas .pkg. O sspm cria
+automaticamente, no diretório onde você chama o build, subpastas temporárias:
+
+  ./src/<pkgname>-<ver>-<rel>   # fontes descompactados e trabalho
+  ./pkg/<pkgname>-<ver>-<rel>   # DESTDIR (árvore final a virar .tar.zst)
+  ./<pkgid>.tar.zst             # pacote binário final
+  ./<pkgid>.manifest            # lista de arquivos do pacote (para remoção)
+
+Banco de dados local (instalações):
+  /var/lib/sspm/                # por padrão
+    ├── packages/<name>/{id,depends}
+    └── files/<name>.files      # manifest dos arquivos instalados
+
+Você pode alterar SSPM_DB via variável de ambiente (ver sessão 4).
+
+
+======================================================================
+3) COMANDOS DO SSPM (EDIÇÃO MODULAR)
+======================================================================
+
+$ sspm help
+  Mostra ajuda curta.
+
+$ sspm build <dir-ou-arquivo> [--no-strip]
+  - Lê todas as receitas *.pkg em <dir> e:
+    * resolve dependências topologicamente (deps primeiro),
+    * faz fetch, extract, prepare, build, check, package (quando definidas),
+    * cria arquivo .tar.zst + .manifest.
+  - Se passar um arquivo .pkg, compila apenas aquele (e ainda assim resolve
+    deps dentro do conjunto fornecido se estiverem juntas no mesmo <dir>).
+  - --no-strip: desabilita strip automático de binários.
+
+$ sspm install <pkg.tar.zst>
+  - Extrai o pacote no sistema (em /),
+  - registra manifest em /var/lib/sspm/files/<name>.files,
+  - registra metadados em /var/lib/sspm/packages/<name>/.
+
+$ sspm remove <name>
+  - Lê o manifest e remove os arquivos,
+  - apaga o registro do DB local,
+  - executa post_remove() se definido.
+
+$ sspm list
+  - Lista pacotes instalados.
+
+$ sspm deps <dir-ou-arquivo> [--reverse]
+  - Mostra ordenação topológica dos pacotes do conjunto (útil para planejar build).
+  - --reverse: ordem invertida (útil para remoção em cadeia).
+
+$ sspm orphans
+  - Lista pacotes instalados que nenhum outro pacote depende deles
+    (checagem simples baseada nos metadados guardados).
+
+$ sspm info <name>
+  - Mostra ID, depends e caminho do manifest de um pacote instalado.
+
+
+======================================================================
+4) VARIÁVEIS DE AMBIENTE ÚTEIS
+======================================================================
+
+SSPM_DB=/caminho/customizado
+  - Define onde ficam os metadados e manifests (default: /var/lib/sspm).
+
+SSPM_COLOR=auto|always|never  (respeita NO_COLOR)
+  - Controle de cores no terminal.
+
+SSPM_JOBS=N
+  - Encaminhado para `make -jN` nas receitas que usarem.
+
+SSPM_STRIP=1|0
+  - Strip automático de binários (default 1; --no-strip força 0).
+
+
+======================================================================
+5) FORMATO DAS RECEITAS (ARQUIVOS .pkg)
+======================================================================
+
+Receita é um shell script simples que define variáveis e funções:
+
+Variáveis obrigatórias:
+  pkgname=...
+  pkgver=...
+  pkgrel=...
+
+Fontes e checksums:
+  source=( "URL1" "URL2" ... )
+  sha512sums=( "HASH1" "HASH2" ... )
+    - Você pode usar "SKIP" temporariamente (não recomendado para produção).
+
+Dependências:
+  depends=( pkgA pkgB ... )        # exigidas para compilar/rodar
+  optdepends=( "foo: texto" ... )  # opcionais (informativo)
+
+Funções (todas opcionais, mas normalmente define-se build() e package()):
+  prepare()  # aplicar patches, gerar arquivos, etc. (roda no srcdir)
+  build()    # compilar (./configure && make, cmake, ninja, etc.)
+  check()    # rodar testes (make check, ctest, etc.)
+  package()  # instalar no DESTDIR (pkgdir), ex: make DESTDIR="$pkgdir" install
+
+Hooks pós-ação:
+  post_install()  # roda após instalar no sistema
+  post_remove()   # roda após remover
+
+Variáveis de diretório (disponibilizadas pelo sspm no build):
+  startdir  -> diretório onde está a receita
+  srcdir    -> diretório de trabalho dos fontes extraídos
+  pkgdir    -> DESTDIR para "make install"
+
+
+======================================================================
+6) BOAS PRÁTICAS
+======================================================================
+
+- Sempre use DESTDIR no package(): make DESTDIR="$pkgdir" install
+- Especifique sha512sums reais (evite SKIP).
+- Aplique patches no prepare() com `patch -p1 < ../nome.patch`.
+- Evite mexer diretamente em / durante build: tudo vai para $pkgdir.
+- Controle CFLAGS/CXXFLAGS/LDFLAGS via ambiente (reprodutibilidade).
+- Divida receitas (ex.: gcc) em subpacotes se quiser (gcc-libs, etc.) — aqui está
+  simplificado em 1 pacote para demonstração.
+
+
+======================================================================
+7) RECEITA DIDÁTICA COMPLETA (usa tudo suportado)
+======================================================================
+
+Arquivo: examples/nano-full.pkg  (exemplo com patch, check e hooks)
+
+  pkgname=nano
+  pkgver=8.0
+  pkgrel=1
+
+  source=(
+    "https://www.nano-editor.org/dist/v8/nano-${pkgver}.tar.xz"
+    "fix-spelling.patch"
+  )
+  # Substitua por hashes reais; aqui está SKIP para simplificar
+  sha512sums=(
+    "SKIP"
+    "SKIP"
+  )
+
+  depends=(ncurses)
+  optdepends=("bash-completion: tab completion for nano")
+
+  prepare() {
+    # Estamos em $srcdir
+    tar -xf "nano-${pkgver}.tar.xz"
+    cd "nano-${pkgver}"
+    # Aplica patch local que veio como segundo source (copiado em $srcdir)
+    patch -p1 < "../fix-spelling.patch"
+  }
+
+  build() {
+    cd "nano-${pkgver}"
+    ./configure --prefix=/usr
+    make ${SSPM_JOBS:+-j$SSPM_JOBS}
+  }
+
+  check() {
+    cd "nano-${pkgver}"
+    make check || true   # muitos projetos têm testes intermitentes
+  }
+
+  package() {
+    cd "nano-${pkgver}"
+    make DESTDIR="$pkgdir" install
+
+    # completions opcionais (exemplo)
+    install -Dm0644 contrib/nano.nanorc "$pkgdir/etc/nanorc"
+  }
+
+  post_install() {
+    echo "nano foi instalado. Dica: leia /etc/nanorc para ajustar syntax highlighting."
+  }
+
+  post_remove() {
+    echo "nano removido. Se editou /etc/nanorc manualmente, verifique sobras."
+  }
+
+======================================================================
+8) RECEITA REAL: GLIBC (simplificada)
+======================================================================
+
+OBS: Construir glibc é delicado: normalmente se usa build-dir separado, toolchain
+coerente e cuidado com —prefix. Abaixo, receita “nativa” simplificada.
+
+Arquivo: base/glibc.pkg
+
+  pkgname=glibc
+  pkgver=2.40
+  pkgrel=1
+
+  source=(
+    "https://ftp.gnu.org/gnu/libc/glibc-${pkgver}.tar.xz"
+  )
+  sha512sums=(
+    "SKIP"    # coloque o hash real
+  )
+
+  depends=()  # na prática: gcc, make, linux-headers já no sistema
+
+  prepare() {
+    tar -xf "glibc-${pkgver}.tar.xz"
+    mkdir -p "glibc-${pkgver}-build"
+  }
+
+  build() {
+    cd "glibc-${pkgver}-build"
+    ../glibc-${pkgver}/configure \
+      --prefix=/usr \
+      --disable-werror
+
+    make ${SSPM_JOBS:+-j$SSPM_JOBS}
+  }
+
+  check() {
+    cd "glibc-${pkgver}-build"
+    # Os testes da glibc demoram muito; habilite se quiser:
+    # make check
+    :
+  }
+
+  package() {
+    cd "glibc-${pkgver}-build"
+    make DESTDIR="$pkgdir" install
+
+    # Ajustes comuns: ld.so.conf.d, nsswitch.conf, locales (opcional)
+    install -dm0755 "$pkgdir/etc/ld.so.conf.d"
+    echo "/usr/local/lib" > "$pkgdir/etc/ld.so.conf.d/locallib.conf"
+
+    # (Opcional) gerar locales — normalmente feito em pós-instalação
+  }
+
+  post_install() {
+    # Atualiza cache do linker
+    /sbin/ldconfig || ldconfig || true
+    echo "glibc: ldconfig executado."
+  }
+
+  post_remove() {
+    echo "glibc: verifique /etc/ld.so.conf.d para sobras personalizadas."
+  }
+
+Notas:
+- Em distros reais, glibc costuma ser um pacote “de base” já presente.
+- Reinstalar a glibc por cima pode corromper o sistema se não for cuidadoso.
+
+
+======================================================================
+9) RECEITA REAL: GCC (simplificada, C/C++)
+======================================================================
+
+GCC precisa das libs GMP, MPFR, MPC (e em geral ISL). Em algumas distros já estão
+presentes como bibliotecas de desenvolvimento. Aqui vamos assumir que existem na
+máquina (via sistema) — do contrário, você pode empacotá-las antes com sspm.
+
+Arquivo: base/gcc.pkg
+
+  pkgname=gcc
+  pkgver=14.2.0
+  pkgrel=1
+
+  source=(
+    "https://ftp.gnu.org/gnu/gcc/gcc-${pkgver}/gcc-${pkgver}.tar.xz"
+  )
+  sha512sums=(
+    "SKIP"   # substitua pelo hash real
+  )
+
+  depends=(glibc gmp mpfr mpc)   # simplificado (assumindo libs já no sistema)
+
+  prepare() {
+    tar -xf "gcc-${pkgver}.tar.xz"
+    mkdir -p "gcc-${pkgver}-build"
+  }
+
+  build() {
+    cd "gcc-${pkgver}-build"
+
+    ../gcc-${pkgver}/configure \
+      --prefix=/usr \
+      --enable-languages=c,c++ \
+      --disable-multilib
+
+    make ${SSPM_JOBS:+-j$SSPM_JOBS}
+  }
+
+  check() {
+    cd "gcc-${pkgver}-build"
+    # Testes do gcc são muito demorados; habilite se necessário:
+    # make -k check || true
+    :
+  }
+
+  package() {
+    cd "gcc-${pkgver}-build"
+    make DESTDIR="$pkgdir" install
+
+    # Ajustes comuns: symlinks, saneamento de includes/bins
+    # Exemplo: garantir symlink /usr/bin/cc -> gcc
+    install -dm0755 "$pkgdir/usr/bin"
+    ln -sf gcc "$pkgdir/usr/bin/cc"
+  }
+
+  post_install() {
+    echo "gcc instalado. Versão:"
+    gcc --version || true
+  }
+
+  post_remove() {
+    echo "gcc removido. Verifique se há outros toolchains instalados."
+  }
+
+Notas:
+- Em ambientes split, você pode querer separar gcc-libs.
+- Se você não tem gmp/mpfr/mpc de sistema, crie receitas para eles e
+  construa-os antes (sspm build base/).
+
+
+======================================================================
+10) RECEITA REAL: FIREFOX (simplificada)
+======================================================================
+
+Firefox é complexíssimo. Requer Rust (>= versão suportada), Cargo, Python3,
+Node.js, yasm/nasm, LLVM/binutils modernos, e uma porção de libs dev (GTK,
+DBus, PulseAudio/ALSA, libffi, pixman, libvpx, zlib, zstd, etc.). Aqui vamos
+mostrar uma receita que baixa o tarball de código-fonte e compila via `./mach`.
+
+- A Mozilla fornece tarballs “*.source.tar.xz” por versão. Ajuste a versão
+  conforme o que você pretende construir (ESR ou stable).
+
+Arquivo: desktop/firefox.pkg
+
+  pkgname=firefox
+  pkgver=128.0.2
+  pkgrel=1
+
+  source=(
+    "https://archive.mozilla.org/pub/firefox/releases/${pkgver}/source/firefox-${pkgver}.source.tar.xz"
+  )
+  sha512sums=(
+    "SKIP"   # substitua pelo hash real
+  )
+
+  depends=(
+    rust cargo python3 nodejs
+    yasm nasm
+    gtk3 dbus
+    libffi pixman zlib zstd libvpx
+    # ... adicione as libs necessárias para a sua distro
+  )
+  optdepends=(
+    "pulseaudio: áudio"
+    "alsa-lib: áudio"
+  )
+
+  prepare() {
+    tar -xf "firefox-${pkgver}.source.tar.xz"
+    cd "firefox-${pkgver}"
+    # Crie mozconfig mínimo (ajuste conforme seu ambiente)
+    cat > .mozconfig <<'EOF'
+ac_add_options --prefix=/usr
+ac_add_options --enable-application=browser
+ac_add_options --disable-debug
+ac_add_options --disable-tests
+mk_add_options MOZ_OBJDIR=./obj
+EOF
+  }
+
+  build() {
+    cd "firefox-${pkgver}"
+    # Baixa toolchains e prepara ambiente (pode interagir; use --no-interactive se suportado)
+    # ./mach bootstrap --no-interactive || true
+    ./mach build
+  }
+
+  check() {
+    cd "firefox-${pkgver}"
+    # Opcional: testes são pesados e demoram
+    :
+  }
+
+  package() {
+    cd "firefox-${pkgver}"
+
+    # Saída de build normalmente fica em obj/dist/firefox
+    # Vamos copiar para /usr/lib/firefox e criar um wrapper em /usr/bin
+    install -dm0755 "$pkgdir/usr/lib/firefox"
+    cp -a obj/dist/firefox/* "$pkgdir/usr/lib/firefox/"
+
+    install -dm0755 "$pkgdir/usr/bin"
+    cat > "$pkgdir/usr/bin/firefox" <<'EOF'
+#!/usr/bin/env bash
+exec /usr/lib/firefox/firefox "$@"
+EOF
+    chmod +x "$pkgdir/usr/bin/firefox"
+
+    # Desktop entry e ícone (se disponíveis)
+    install -dm0755 "$pkgdir/usr/share/applications"
+    cat > "$pkgdir/usr/share/applications/firefox.desktop" <<'EOF'
+[Desktop Entry]
+Name=Firefox
+Comment=Browse the Web
+Exec=firefox %u
+Terminal=false
+Type=Application
+Icon=firefox
+Categories=Network;WebBrowser;
+MimeType=text/html;x-scheme-handler/http;x-scheme-handler/https;
+EOF
+  }
+
+  post_install() {
+    echo "Firefox instalado em /usr/lib/firefox, binário /usr/bin/firefox"
+  }
+
+  post_remove() {
+    echo "Firefox removido. Verifique caches do ícone/menu."
+  }
+
+Notas:
+- `./mach bootstrap` tenta instalar dependências de build (varia por distro).
+- Ajuste a `mozconfig` para uso de system libs (libvpx, ffmpeg, etc.) e para
+  otimizações (LTO, PGO) conforme sua máquina. Receita acima é o caminho curto.
+
+
+======================================================================
+11) EXEMPLOS DE USO
+======================================================================
+
+Build de um conjunto de pacotes com resolução topológica:
+  $ sspm deps ~/pkgs/base
+  glibc.pkg
+  gcc.pkg
+
+  $ sspm build ~/pkgs/base
+  # compila glibc e depois gcc, em ordem correta
+
+Instalar e listar:
+  $ sudo sspm install glibc-2.40-1.tar.zst
+  $ sudo sspm install gcc-14.2.0-1.tar.zst
+  $ sspm list
+
+Remover em ordem reversa (útil quando um depende do outro):
+  $ sspm deps ~/pkgs/base --reverse
+  gcc.pkg
+  glibc.pkg
+
+  $ sudo sspm remove gcc
+  $ sudo sspm remove glibc
+
+Checar órfãos:
+  $ sspm orphans
+
+Info de um pacote:
+  $ sspm info gcc
+
+
+======================================================================
+12) DICAS FINAIS
+======================================================================
+
+- Para migrar builds complexos (como firefox) para produção:
+  * Congele versões das dependências dev (Rust, Node) e verifique compatibilidade.
+  * Troque SKIP por SHA512 reais (confiabilidade e reprodutibilidade).
+  * Parametrize flags (CFLAGS, LDFLAGS) e use `SSPM_JOBS` para paralelismo.
+  * Considere dividir pacotes grandes (ex.: gcc-libs vs gcc).
+- Se precisar de remoção 100% limpa, garanta que TUDO seja instalado via
+  `package()` dentro de `$pkgdir` — assim o manifest cobre todos os arquivos.
+
+
+FIM
+==================================================
+```0
