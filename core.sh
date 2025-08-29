@@ -85,3 +85,23 @@ remove_pkg() {
     [ "$(type -t post_remove)" = function ] && post_remove
     ok "Removed $name"
 }
+
+upgrade_pkgs() {
+    log "Checking for upgrades..."
+    for meta in "$PKGDB"/*; do
+        [ -f "$meta" ] || continue
+        name="$(basename "$meta")"
+        oldver=$(cut -d- -f2 <<<"$name")
+        recipe=$(find_recipe "$name" | sed 's#.*/##')
+        [ -n "$recipe" ] || continue
+
+        . "$REPO_DIR"/*/"$recipe"
+        newver="$pkgver"
+
+        if [ "$newver" \> "$oldver" ]; then
+            log "Upgrading $name -> $pkgname-$newver"
+            resolve_and_install "$pkgname"
+        fi
+    done
+    ok "Upgrade check finished"
+}
