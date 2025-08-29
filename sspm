@@ -39,5 +39,7 @@ case "$cmd" in
     orphans) list_orphans ;;
     info)    show_info "$@" ;;
     help|--help|-h) usage ;;
+    sync)    sync_repo ;;
+    upgrade) upgrade_pkgs ;;
     *) error "Unknown command: $cmd"; usage; exit 1 ;;
 esac
