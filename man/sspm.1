@@ -1,0 +1,32 @@
+.TH SSPM 1 "2025" "sspm clean edition"
+.SH NAME
+sspm \- Simple Source Package Manager
+.SH SYNOPSIS
+.B sspm
+[\fIcommand\fR] [options]
+.SH DESCRIPTION
+.B sspm
+is a lightweight source-based package manager.
+
+.SH COMMANDS
+.TP
+.B build <dir>
+Build packages from recipes in directory.
+.TP
+.B install <pkg.tar.zst>
+Install a built package archive.
+.TP
+.B remove <name>
+Remove an installed package.
+.TP
+.B list
+List installed packages.
+.TP
+.B deps <dir> [--reverse]
+Show topological dependency order (reverse for removal).
+.TP
+.B orphans
+List orphan packages.
+.TP
+.B info <name>
+Show package info.
