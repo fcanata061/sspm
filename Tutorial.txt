@@ -147,6 +147,112 @@ SSPM_JOBS=N
 SSPM_STRIP=1|0
   - Strip automático de binários (default 1; --no-strip força 0).
 
+===============================
+ Arquivo: modificacoes-sspm.txt
+===============================
+
+# 1. Criar novo arquivo: lib/repo.sh
+----------------------------------------------------
+#!/usr/bin/env bash
+
+REPO_URL="${REPO_URL:-https://github.com/seuuser/seurepo.git}"
+REPO_DIR="${REPO_DIR:-/var/lib/sspm/repo}"
+
+sync_repo() {
+    if [ -d "$REPO_DIR/.git" ]; then
+        log "Updating repo in $REPO_DIR"
+        (cd "$REPO_DIR" && git pull) || error "Failed to sync repo"
+    else
+        log "Cloning repo into $REPO_DIR"
+        git clone "$REPO_URL" "$REPO_DIR" || error "Failed to clone repo"
+    fi
+    ok "Repo synchronized"
+}
+
+find_recipe() {
+    local name="$1"
+    find "$REPO_DIR" -type f -name "$name-*.pkg" | sort -V | tail -n1
+}
+----------------------------------------------------
+
+⚠️ Torne executável:
+    chmod +x lib/repo.sh
+
+E no script principal "sspm", importe com:
+    . "$SSPM_LIB/repo.sh"
+
+
+# 2. Alterar lib/deps.sh → adicionar no final
+----------------------------------------------------
+resolve_and_install() {
+    local pkg="$1"
+
+    if [ -f "$PKGDB/$pkg" ]; then
+        log "$pkg already installed"
+        return
+    fi
+
+    local recipe
+    recipe=$(find_recipe "$pkg")
+    [ -n "$recipe" ] || error "No recipe found for $pkg"
+
+    . "$recipe"
+    for dep in "${depends[@]:-}"; do
+        resolve_and_install "$dep"
+    done
+
+    build_pkg "$recipe"
+    install_pkg "${pkgname}-${pkgver}-${pkgrel}.tar.zst"
+}
+----------------------------------------------------
+
+
+# 3. Alterar lib/core.sh → adicionar no final
+----------------------------------------------------
+upgrade_pkgs() {
+    log "Checking for upgrades..."
+    for meta in "$PKGDB"/*; do
+        [ -f "$meta" ] || continue
+        name="$(basename "$meta")"
+        oldver=$(cut -d- -f2 <<<"$name")
+        recipe=$(find_recipe "$name" | sed 's#.*/##')
+        [ -n "$recipe" ] || continue
+
+        . "$REPO_DIR"/*/"$recipe"
+        newver="$pkgver"
+
+        if [ "$newver" \> "$oldver" ]; then
+            log "Upgrading $name -> $pkgname-$newver"
+            resolve_and_install "$pkgname"
+        fi
+    done
+    ok "Upgrade check finished"
+}
+----------------------------------------------------
+
+
+# 4. Alterar o "sspm" principal → no case adicionar:
+----------------------------------------------------
+    sync)    sync_repo ;;
+    upgrade) upgrade_pkgs ;;
+----------------------------------------------------
+
+
+# 5. Como usar
+----------------------------------------------------
+1. Configure o repositório git de receitas:
+   export REPO_URL="https://github.com/seuuser/meu-repo-sspm.git"
+
+2. Sincronize:
+   ./sspm sync
+
+3. Instale pacote (com dependências):
+   ./sspm install gcc
+
+4. Faça upgrade de versões novas:
+   ./sspm upgrade
+----------------------------------------------------
+
 
 ======================================================================
 5) FORMATO DAS RECEITAS (ARQUIVOS .pkg)
