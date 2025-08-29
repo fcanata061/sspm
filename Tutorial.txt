@@ -148,109 +148,126 @@ SSPM_STRIP=1|0
   - Strip automático de binários (default 1; --no-strip força 0).
 
 ===============================
- Arquivo: modificacoes-sspm.txt
+ Repo de receitas
+
+meu-repo-sspm/
+├── base/
+│   ├── gcc-12.0/
+│   │   └── gcc-12.0.pkg
+│   ├── glibc-2.39/
+│   │   └── glibc-2.39.pkg
+│   └── make-4.4/
+│       └── make-4.4.pkg
+├── x11/
+│   └── xorg-21.1/
+│       └── xorg-21.1.pkg
+├── desktop/
+│   └── firefox-128.0/
+│       └── firefox-128.0.pkg
+└── extras/
+    └── htop-3.3/
+        └── htop-3.3.pkg
+
+------‐--------------------)-)------------
+
+===============================
+ Arquivo: tutorial-repo-sspm.txt
 ===============================
 
-# 1. Criar novo arquivo: lib/repo.sh
-----------------------------------------------------
-#!/usr/bin/env bash
+# 📂 Estrutura do repositório Git
+O repositório de receitas deve ter a seguinte organização:
 
-REPO_URL="${REPO_URL:-https://github.com/seuuser/seurepo.git}"
-REPO_DIR="${REPO_DIR:-/var/lib/sspm/repo}"
+meu-repo-sspm/
+├── base/
+│   ├── gcc-12.0/
+│   │   └── gcc-12.0.pkg
+│   ├── glibc-2.39/
+│   │   └── glibc-2.39.pkg
+│   └── make-4.4/
+│       └── make-4.4.pkg
+├── x11/
+│   └── xorg-21.1/
+│       └── xorg-21.1.pkg
+├── desktop/
+│   └── firefox-128.0/
+│       └── firefox-128.0.pkg
+└── extras/
+    └── htop-3.3/
+        └── htop-3.3.pkg
 
-sync_repo() {
-    if [ -d "$REPO_DIR/.git" ]; then
-        log "Updating repo in $REPO_DIR"
-        (cd "$REPO_DIR" && git pull) || error "Failed to sync repo"
-    else
-        log "Cloning repo into $REPO_DIR"
-        git clone "$REPO_URL" "$REPO_DIR" || error "Failed to clone repo"
-    fi
-    ok "Repo synchronized"
+Cada pacote fica numa pasta própria com a versão no nome e um arquivo .pkg (a receita).
+Exemplo: base/gcc-12.0/gcc-12.0.pkg
+
+
+# ⚙️ Configuração no sspm
+
+1. Escolha um local para armazenar o repo clonado
+   Padrão:
+       /var/lib/sspm/repo
+   Ou personalizado:
+       export REPO_DIR="$HOME/.local/share/sspm/repo"
+
+2. Defina a URL do seu repositório Git:
+       export REPO_URL="https://github.com/seuuser/meu-repo-sspm.git"
+
+3. Verifique se o sspm está pegando as variáveis:
+       ./sspm help
+       echo $REPO_URL
+       echo $REPO_DIR
+
+
+# 🚀 Como usar na prática
+
+1. Sincronizar as receitas:
+       ./sspm sync
+   - Se ainda não existir, ele faz git clone do seu repo em $REPO_DIR
+   - Se já existir, ele faz git pull e atualiza
+
+2. Instalar um pacote (com dependências):
+       ./sspm install gcc
+   - Procura a receita mais nova no repo
+   - Lê a lista depends=(...) da receita e instala dependências antes
+   - Por fim, builda e instala o pacote
+
+3. Atualizar pacotes já instalados:
+       ./sspm upgrade
+   - Percorre todos os pacotes instalados em $PKGDB/
+   - Compara versão instalada com a mais nova no repo Git
+   - Se houver versão maior, instala a nova versão automaticamente
+
+
+# 📦 Estrutura de uma receita .pkg
+
+Exemplo: base/gcc-12.0/gcc-12.0.pkg
+
+pkgname=gcc
+pkgver=12.0
+pkgrel=1
+depends=(glibc make)
+
+build() {
+    ./configure --prefix=/usr
+    make
 }
 
-find_recipe() {
-    local name="$1"
-    find "$REPO_DIR" -type f -name "$name-*.pkg" | sort -V | tail -n1
+package() {
+    make DESTDIR="$PKGDEST" install
 }
-----------------------------------------------------
-
-⚠️ Torne executável:
-    chmod +x lib/repo.sh
-
-E no script principal "sspm", importe com:
-    . "$SSPM_LIB/repo.sh"
 
 
-# 2. Alterar lib/deps.sh → adicionar no final
-----------------------------------------------------
-resolve_and_install() {
-    local pkg="$1"
+# 📝 Resumo rápido dos comandos
 
-    if [ -f "$PKGDB/$pkg" ]; then
-        log "$pkg already installed"
-        return
-    fi
+./sspm sync
+    → baixa/atualiza as receitas do repo Git
 
-    local recipe
-    recipe=$(find_recipe "$pkg")
-    [ -n "$recipe" ] || error "No recipe found for $pkg"
+./sspm install <pacote>
+    → instala pacote + dependências
 
-    . "$recipe"
-    for dep in "${depends[@]:-}"; do
-        resolve_and_install "$dep"
-    done
-
-    build_pkg "$recipe"
-    install_pkg "${pkgname}-${pkgver}-${pkgrel}.tar.zst"
-}
-----------------------------------------------------
+./sspm upgrade
+    → procura novas versões no repo e atualiza
 
 
-# 3. Alterar lib/core.sh → adicionar no final
-----------------------------------------------------
-upgrade_pkgs() {
-    log "Checking for upgrades..."
-    for meta in "$PKGDB"/*; do
-        [ -f "$meta" ] || continue
-        name="$(basename "$meta")"
-        oldver=$(cut -d- -f2 <<<"$name")
-        recipe=$(find_recipe "$name" | sed 's#.*/##')
-        [ -n "$recipe" ] || continue
 
-        . "$REPO_DIR"/*/"$recipe"
-        newver="$pkgver"
-
-        if [ "$newver" \> "$oldver" ]; then
-            log "Upgrading $name -> $pkgname-$newver"
-            resolve_and_install "$pkgname"
-        fi
-    done
-    ok "Upgrade check finished"
-}
-----------------------------------------------------
-
-
-# 4. Alterar o "sspm" principal → no case adicionar:
-----------------------------------------------------
-    sync)    sync_repo ;;
-    upgrade) upgrade_pkgs ;;
-----------------------------------------------------
-
-
-# 5. Como usar
-----------------------------------------------------
-1. Configure o repositório git de receitas:
-   export REPO_URL="https://github.com/seuuser/meu-repo-sspm.git"
-
-2. Sincronize:
-   ./sspm sync
-
-3. Instale pacote (com dependências):
-   ./sspm install gcc
-
-4. Faça upgrade de versões novas:
-   ./sspm upgrade
 ----------------------------------------------------
 
 
