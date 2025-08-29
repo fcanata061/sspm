@@ -59,3 +59,24 @@ list_orphans() {
         fi
     done
 }
+
+resolve_and_install() {
+    local pkg="$1"
+
+    if [ -f "$PKGDB/$pkg" ]; then
+        log "$pkg already installed"
+        return
+    fi
+
+    local recipe
+    recipe=$(find_recipe "$pkg")
+    [ -n "$recipe" ] || error "No recipe found for $pkg"
+
+    . "$recipe"
+    for dep in "${depends[@]:-}"; do
+        resolve_and_install "$dep"
+    done
+
+    build_pkg "$recipe"
+    install_pkg "${pkgname}-${pkgver}-${pkgrel}.tar.zst"
+}
