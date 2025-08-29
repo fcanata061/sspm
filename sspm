@@ -9,6 +9,7 @@ LIBDIR="$(dirname "$0")/lib"
 . "$LIBDIR/core.sh"
 . "$LIBDIR/deps.sh"
 . "$LIBDIR/pkg.sh"
+. "$SSPM_LIB/repo.sh"
 
 usage() {
     echo "sspm - Simple Source Package Manager"
