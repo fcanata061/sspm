@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# sspm - Simple Source Package Manager (clean edition)
+
+set -euo pipefail
+
+LIBDIR="$(dirname "$0")/lib"
+
+. "$LIBDIR/ui.sh"
+. "$LIBDIR/core.sh"
+. "$LIBDIR/deps.sh"
+. "$LIBDIR/pkg.sh"
+
+usage() {
+    echo "sspm - Simple Source Package Manager"
+    echo
+    echo "Usage: sspm <command> [options] [package]"
+    echo
+    echo "Commands:"
+    echo "  build <dir>        Build package(s) from recipes"
+    echo "  install <pkg.tar.zst>  Install built package"
+    echo "  remove <name>      Remove installed package"
+    echo "  list               List installed packages"
+    echo "  deps <dir> [--reverse]  Show dependencies (topological)"
+    echo "  orphans            Show orphan packages"
+    echo "  info <name>        Show package info"
+    echo "  help               Show this help"
+}
+
+cmd="${1:-help}"
+shift || true
+
+case "$cmd" in
+    build)   build_pkgs "$@" ;;
+    install) install_pkg "$@" ;;
+    remove)  remove_pkg "$@" ;;
+    list)    list_packages ;;
+    deps)    resolve_deps "$@" ;;
+    orphans) list_orphans ;;
+    info)    show_info "$@" ;;
+    help|--help|-h) usage ;;
+    *) error "Unknown command: $cmd"; usage; exit 1 ;;
+esac
